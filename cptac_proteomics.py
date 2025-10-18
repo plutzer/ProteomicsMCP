@@ -6,7 +6,6 @@ from typing import List, Dict, Tuple, Optional, Union
 # Correct logging for mcp
 import logging
 from typing import Any
-import httpx
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
