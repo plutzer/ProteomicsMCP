@@ -7,7 +7,7 @@ MCP Server for querying CPTAC proteomics data through the Model Context Protocol
 1. **Install Python dependencies:**
 
 ```bash
-pip install cptac pandas numpy mcp
+pip install cptac pandas numpy scipy mcp
 ```
 
 2. **Clone or download this repository to your local machine.**
@@ -44,7 +44,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install cptac pandas numpy mcp
+pip install cptac pandas numpy scipy mcp
 
 # Find the Python executable path
 which python  # On Windows: where python
@@ -54,7 +54,7 @@ which python  # On Windows: where python
 ```bash
 conda create -n proteomics python=3.11
 conda activate proteomics
-pip install cptac pandas numpy mcp
+pip install cptac pandas numpy scipy mcp
 which python  # On Windows: where python
 ```
 
@@ -93,7 +93,12 @@ macOS/Linux with venv:
 Once configured, the CPTAC MCP server provides the following tools in Claude Desktop:
 
 - **`get_cancer_types()`**: List available cancer datasets
-- **`phospho_tumor_vs_normal(cancer, query, normalized)`**: Query phosphoproteomics data
+- **`phospho_tumor_vs_normal(cancer, query, normalized)`**: Query phosphoproteomics data with tumor vs normal statistics
+  - Returns log2 fold change, p-value, and FDR-adjusted p-value for each phosphosite
+  - Performs paired t-tests between tumor and normal samples
+- **`protein_tumor_vs_normal(cancer, query)`**: Query whole-cell proteomics data with tumor vs normal statistics
+  - Returns log2 fold change, p-value, and FDR-adjusted p-value for each protein
+  - Performs paired t-tests between tumor and normal samples
 
 ### Example Queries
 
@@ -101,6 +106,8 @@ Ask Claude:
 - "What cancer types are available in CPTAC?"
 - "Get phosphoproteomics data for AKT1_S473 in breast cancer"
 - "Show me all phosphosites for TP53 in lung adenocarcinoma, normalized"
+- "Compare AKT1 and EGFR protein levels between tumor and normal in ovarian cancer"
+- "What are the most significantly changed phosphosites for MAPK1 in colorectal cancer?"
 
 ## Supported Cancer Types
 
