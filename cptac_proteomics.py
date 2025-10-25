@@ -87,6 +87,33 @@ def get_normalized_phospho(cancer):
     logging.info(f"Normalized data shape: {normalized_phospho.shape}")
     return normalized_phospho
 
+
+def get_deduplicated_proteomics(cancer):
+    """
+    Get deduplicated proteomics data in transposed format.
+
+    Parameters:
+    -----------
+    cancer : cptac cancer object
+        CPTAC cancer dataset object
+
+    Returns:
+    --------
+    pd.DataFrame
+        Transposed, deduplicated proteomics data with samples as columns
+    """
+    logging.info("Loading and deduplicating proteomics data...")
+    proteomics = cancer.get_proteomics('bcm').T
+    proteomics.columns = proteomics.columns.values.tolist()
+
+    # Check if index is MultiIndex and deduplicate if needed
+    if isinstance(proteomics.index, pd.MultiIndex):
+        proteomics = proteomics.groupby(level=list(range(proteomics.index.nlevels))).agg('mean').replace(-np.inf, np.nan).replace(np.inf, np.nan)
+        logging.info(f"Deduplicated proteomics data")
+
+    logging.info(f"Proteomics data shape: {proteomics.shape} (proteins x samples)")
+    return proteomics
+
 ################################
 ######## MCP Tools #############
 ################################
@@ -443,19 +470,363 @@ def protein_tumor_vs_normal(cancer, query):
     return {'results': results}
 
 
+@mcp.tool()
+def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
+    """
+    Analyze correlations between items in a query set across tumor samples.
+
+    Parameters:
+    -----------
+    cancer : cptac cancer name (str)
+        Supported cancers: 'brca', 'coad', 'hnscc', 'luad', 'ovarian', 'ccrcc', 'gbm', 'lscc', 'pdac'
+    query : str
+        Comma-separated list of items to correlate.
+        For phospho data: 'Gene_Site' format (e.g., 'AKT1_S473,TP53_S15') or gene names
+        For protein data: gene names (e.g., 'AKT1,TP53')
+        To force protein-only search: append '_protein' to gene name (e.g., 'TSC2_protein')
+        Can mix phospho and protein queries if data_type='both'
+        Examples: 'MTOR_S2448,TSC2_protein' queries MTOR S2448 phosphosite and TSC2 protein
+    data_type : str
+        Type of data to analyze: 'phospho', 'proteomics', or 'both' (default: 'phospho')
+    normalized : str
+        For phospho data, if 'true' use protein-normalized data, if 'false' use raw data (default: 'true')
+
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - correlation_matrix: Pairwise Pearson correlations between all queried items
+        - p_value_matrix: Adjusted p-values (FDR-corrected) for each correlation
+        - item_labels: Labels for each item in the matrices
+        - n_samples: Number of samples used in correlation analysis
+    """
+
+    cancer_obj = cancers.get(cancer)
+    if cancer_obj is None:
+        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {list(cancers.keys())}")
+
+    # Validate data_type parameter
+    if data_type not in ['phospho', 'proteomics', 'both']:
+        raise ValueError("Parameter 'data_type' must be 'phospho', 'proteomics', or 'both'")
+
+    # Get data based on data_type
+    phospho_data = None
+    protein_data = None
+
+    if data_type in ['phospho', 'both']:
+        if normalized == 'true':
+            phospho_data = get_normalized_phospho(cancer_obj)
+        elif normalized == 'false':
+            phospho_data = get_deduplicated_phospho(cancer_obj)
+        else:
+            raise ValueError("Parameter 'normalized' must be 'true' or 'false'")
+
+    if data_type in ['proteomics', 'both']:
+        protein_data = get_deduplicated_proteomics(cancer_obj)
+
+    # Parse query string
+    query_items = [item.strip() for item in query.split(',')]
+    logging.info(f"Querying {len(query_items)} items: {query_items}")
+
+    # Build data matrix: rows are items, columns are samples
+    item_data = {}  # Dict mapping item label to Series of values across samples
+    item_labels = []  # List of item labels in order
+
+    for query_item in query_items:
+        found = False
+        force_protein = False
+
+        # Check if user explicitly requested protein data (ends with _protein)
+        if query_item.endswith('_protein'):
+            force_protein = True
+            query_item = query_item[:-8]  # Remove '_protein' suffix
+            logging.info(f"Forcing protein-only search for {query_item}")
+
+        # Determine if this looks like a phosphosite query (Gene_Site format)
+        is_phosphosite_query = False
+        if '_' in query_item and not force_protein:
+            parts = query_item.split('_')
+            if len(parts) >= 2:
+                potential_site = parts[1]
+                # Check if it looks like a phosphosite (starts with S/T/Y and has numbers)
+                if len(potential_site) > 0 and potential_site[0] in ['S', 'T', 'Y']:
+                    is_phosphosite_query = True
+
+        # Try to find in phospho data first (if available and not forced to protein)
+        if phospho_data is not None and not force_protein:
+            if is_phosphosite_query:
+                # Parse as Gene_Site
+                parts = query_item.split('_')
+                gene = parts[0]
+                site = '_'.join(parts[1:])
+
+                # Search for matching phosphosites
+                matching_rows = [idx for idx in phospho_data.index
+                               if idx[0] == gene and idx[1] == site]
+
+                if matching_rows:
+                    # Use first match if multiple
+                    idx = matching_rows[0]
+                    item_label = f"{idx[0]}_{idx[1]}"
+                    item_labels.append(item_label)
+                    item_data[item_label] = phospho_data.loc[idx]
+                    found = True
+                    logging.info(f"Found phosphosite {item_label}")
+            else:
+                # Try as gene name in phospho data - get all sites
+                matching_rows = [idx for idx in phospho_data.index if idx[0] == query_item]
+                if matching_rows:
+                    # For gene-level queries in phospho, use first site as representative
+                    idx = matching_rows[0]
+                    item_label = f"{idx[0]}_{idx[1]}"
+                    item_labels.append(item_label)
+                    item_data[item_label] = phospho_data.loc[idx]
+                    found = True
+                    logging.info(f"Found phosphosite {item_label} for gene {query_item}")
+
+        # If not found in phospho, try protein data (or if forced to protein)
+        if not found and protein_data is not None:
+            gene = query_item.split('_')[0] if '_' in query_item and not force_protein else query_item
+
+            if isinstance(protein_data.index, pd.MultiIndex):
+                matching_indices = [idx for idx in protein_data.index if idx[0] == gene]
+                if matching_indices:
+                    idx = matching_indices[0]
+                    item_label = f"{idx[0]}_protein"
+                    item_labels.append(item_label)
+                    item_data[item_label] = protein_data.loc[idx]
+                    found = True
+                    logging.info(f"Found protein {item_label}")
+            else:
+                if gene in protein_data.index:
+                    item_label = f"{gene}_protein"
+                    item_labels.append(item_label)
+                    item_data[item_label] = protein_data.loc[gene]
+                    found = True
+                    logging.info(f"Found protein {item_label}")
+
+        if not found:
+            logging.warning(f"No data found for query item: {query_item}")
+
+    # Return error if no items found
+    if len(item_data) == 0:
+        return {"error": f"No matching data found for query: {query}"}
+
+    # Create DataFrame with items as rows and samples as columns
+    data_matrix = pd.DataFrame(item_data).T
+    logging.info(f"Data matrix shape: {data_matrix.shape} (items x samples)")
+
+    # Filter to tumor samples only (exclude .N samples)
+    tumor_cols = [col for col in data_matrix.columns if '.N' not in col]
+    data_matrix = data_matrix[tumor_cols]
+    logging.info(f"Using {len(tumor_cols)} tumor samples for correlation analysis")
+
+    # Calculate pairwise correlations
+    n_items = len(item_labels)
+    corr_matrix = np.zeros((n_items, n_items))
+    pval_matrix = np.zeros((n_items, n_items))
+
+    for i in range(n_items):
+        for j in range(n_items):
+            if i == j:
+                corr_matrix[i, j] = 1.0
+                pval_matrix[i, j] = 0.0
+            else:
+                # Get data for both items
+                x = data_matrix.iloc[i].values
+                y = data_matrix.iloc[j].values
+
+                # Remove NaN pairs
+                mask = ~(np.isnan(x) | np.isnan(y))
+                x_clean = x[mask]
+                y_clean = y[mask]
+
+                if len(x_clean) > 2:
+                    # Calculate Pearson correlation
+                    corr, pval = stats.pearsonr(x_clean, y_clean)
+                    corr_matrix[i, j] = corr
+                    pval_matrix[i, j] = pval
+                else:
+                    corr_matrix[i, j] = np.nan
+                    pval_matrix[i, j] = np.nan
+                    logging.warning(f"Insufficient data for correlation between {item_labels[i]} and {item_labels[j]}")
+
+    # Apply FDR correction to p-values
+    # Extract upper triangle p-values (excluding diagonal)
+    upper_tri_indices = np.triu_indices(n_items, k=1)
+    upper_tri_pvals = pval_matrix[upper_tri_indices]
+
+    # Filter out NaN p-values
+    valid_mask = ~np.isnan(upper_tri_pvals)
+    valid_pvals = upper_tri_pvals[valid_mask]
+
+    if len(valid_pvals) > 0:
+        # Apply FDR correction
+        adjusted_pvals = false_discovery_control(valid_pvals, method='bh')
+
+        # Create adjusted p-value matrix
+        adjusted_pval_matrix = np.zeros((n_items, n_items))
+        adjusted_pval_matrix[:] = np.nan
+
+        # Fill in adjusted p-values
+        valid_idx = 0
+        for idx_pos, (i, j) in enumerate(zip(upper_tri_indices[0], upper_tri_indices[1])):
+            if valid_mask[idx_pos]:
+                adjusted_pval_matrix[i, j] = adjusted_pvals[valid_idx]
+                adjusted_pval_matrix[j, i] = adjusted_pvals[valid_idx]  # Make symmetric
+                valid_idx += 1
+            else:
+                adjusted_pval_matrix[i, j] = np.nan
+                adjusted_pval_matrix[j, i] = np.nan
+
+        # Diagonal should be 0
+        for i in range(n_items):
+            adjusted_pval_matrix[i, i] = 0.0
+
+        logging.info(f"Applied FDR correction to {len(valid_pvals)} p-values")
+    else:
+        adjusted_pval_matrix = pval_matrix.copy()
+        logging.warning("No valid p-values to adjust")
+
+    # Convert matrices to dictionaries for JSON serialization
+    corr_dict = {}
+    pval_dict = {}
+
+    for i, label_i in enumerate(item_labels):
+        corr_dict[label_i] = {}
+        pval_dict[label_i] = {}
+        for j, label_j in enumerate(item_labels):
+            corr_val = corr_matrix[i, j]
+            pval_val = adjusted_pval_matrix[i, j]
+
+            corr_dict[label_i][label_j] = float(corr_val) if not np.isnan(corr_val) else None
+            pval_dict[label_i][label_j] = float(pval_val) if not np.isnan(pval_val) else None
+
+    return {
+        'correlation_matrix': corr_dict,
+        'p_value_adjusted_matrix': pval_dict,
+        'item_labels': item_labels,
+        'n_samples': len(tumor_cols)
+    }
+
+
 def test():
-    print('Testing protein_tumor_vs_normal...')
+    print('Testing correlation_analysis...')
     logging.basicConfig(level=logging.INFO)
+
+    # Test 1: Phospho correlation analysis
+    print('\n' + '='*60)
+    print('Test 1: Phospho correlation analysis (COAD)')
+    print('='*60)
     try:
-        result = protein_tumor_vs_normal('ovarian', 'AKT1,TP53')
-        print(f"\nResult type: {type(result)}")
+        result = correlation_analysis('coad', 'CTNNB1_S675,GSK3B_S9,AKT1_S473', data_type='phospho', normalized='true')
         if isinstance(result, dict):
             if 'error' in result:
                 print(f"Error: {result['error']}")
             else:
-                print(f"Number of results: {len(result.get('results', []))}")
-                for r in result.get('results', []):
-                    print(f"  {r['gene']}: log2FC={r['log2_fold_change']:.3f}, p={r['p_value']:.3e}, n_pairs={r['n_pairs']}")
+                print(f"\nItems analyzed: {result['item_labels']}")
+                print(f"Number of samples: {result['n_samples']}")
+                print(f"\nCorrelation Matrix:")
+                for item_i in result['item_labels']:
+                    row = []
+                    for item_j in result['item_labels']:
+                        val = result['correlation_matrix'][item_i][item_j]
+                        if val is not None:
+                            row.append(f"{val:7.3f}")
+                        else:
+                            row.append("    NaN")
+                    print(f"  {item_i:20s}: {' '.join(row)}")
+
+                print(f"\nAdjusted P-value Matrix:")
+                for item_i in result['item_labels']:
+                    row = []
+                    for item_j in result['item_labels']:
+                        val = result['p_value_adjusted_matrix'][item_i][item_j]
+                        if val is not None:
+                            if val == 0.0:
+                                row.append("  0.000")
+                            else:
+                                row.append(f"{val:7.3e}")
+                        else:
+                            row.append("    NaN")
+                    print(f"  {item_i:20s}: {' '.join(row)}")
+    except Exception as e:
+        print(f"Exception occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Test 2: Protein correlation analysis
+    print('\n' + '='*60)
+    print('Test 2: Protein correlation analysis (LUAD)')
+    print('='*60)
+    try:
+        result = correlation_analysis('luad', 'AKT1,TP53,EGFR,KRAS', data_type='proteomics')
+        if isinstance(result, dict):
+            if 'error' in result:
+                print(f"Error: {result['error']}")
+            else:
+                print(f"\nItems analyzed: {result['item_labels']}")
+                print(f"Number of samples: {result['n_samples']}")
+                print(f"\nCorrelation Matrix:")
+                for item_i in result['item_labels']:
+                    row = []
+                    for item_j in result['item_labels']:
+                        val = result['correlation_matrix'][item_i][item_j]
+                        if val is not None:
+                            row.append(f"{val:7.3f}")
+                        else:
+                            row.append("    NaN")
+                    print(f"  {item_i:20s}: {' '.join(row)}")
+
+                # Only print significant correlations
+                print(f"\nSignificant correlations (adjusted p < 0.05):")
+                for item_i in result['item_labels']:
+                    for item_j in result['item_labels']:
+                        if item_i < item_j:  # Only print upper triangle
+                            corr = result['correlation_matrix'][item_i][item_j]
+                            pval = result['p_value_adjusted_matrix'][item_i][item_j]
+                            if pval is not None and pval < 0.05:
+                                print(f"  {item_i} vs {item_j}: r={corr:.3f}, p_adj={pval:.3e}")
+    except Exception as e:
+        print(f"Exception occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Test 3: TSC2 protein vs MTOR phosphosites (Mixed phospho/protein)
+    print('\n' + '='*60)
+    print('Test 3: MTOR phosphosites vs TSC2 protein correlation (LUAD)')
+    print('='*60)
+    try:
+        result = correlation_analysis('luad', 'MTOR_S2448,MTOR_S2478,MTOR_S2481,MTOR_S1821,TSC2_protein',
+                                     data_type='both', normalized='true')
+        if isinstance(result, dict):
+            if 'error' in result:
+                print(f"Error: {result['error']}")
+            else:
+                print(f"\nItems analyzed: {result['item_labels']}")
+                print(f"Number of samples: {result['n_samples']}")
+                print(f"\nCorrelation Matrix:")
+                for item_i in result['item_labels']:
+                    row = []
+                    for item_j in result['item_labels']:
+                        val = result['correlation_matrix'][item_i][item_j]
+                        if val is not None:
+                            row.append(f"{val:7.3f}")
+                        else:
+                            row.append("    NaN")
+                    print(f"  {item_i:20s}: {' '.join(row)}")
+
+                # Highlight TSC2 correlations
+                print(f"\nMTOR phosphosite correlations with TSC2 protein:")
+                tsc2_label = [l for l in result['item_labels'] if 'TSC2' in l][0]
+                for item in result['item_labels']:
+                    if item != tsc2_label and 'MTOR' in item:
+                        corr = result['correlation_matrix'][item][tsc2_label]
+                        pval = result['p_value_adjusted_matrix'][item][tsc2_label]
+                        sig = '***' if pval and pval < 0.001 else '**' if pval and pval < 0.01 else '*' if pval and pval < 0.05 else ''
+                        if corr is not None and pval is not None:
+                            direction = 'NEGATIVE' if corr < 0 else 'positive'
+                            print(f"  {item:15s}: r={corr:7.3f}, p_adj={pval:8.4f}  ({direction}) {sig}")
     except Exception as e:
         print(f"Exception occurred: {e}")
         import traceback
