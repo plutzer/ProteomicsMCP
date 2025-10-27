@@ -301,7 +301,26 @@ def phospho_tumor_vs_normal(cancer, query, normalized="true"):
             r['p_value_adjusted'] = None
         logging.warning("No valid p-values to adjust")
 
-    return {'results': results}
+    # Convert to tabular format for better LLM retrieval accuracy
+    columns = ['gene', 'site', 'peptide', 'database_id', 'log2_fold_change',
+               'p_value', 'p_value_adjusted', 'n_pairs', 'mean_tumor', 'mean_normal']
+    data = []
+    for r in results:
+        row = [
+            r.get('gene'),
+            r.get('site'),
+            r.get('peptide'),
+            r.get('database_id'),
+            r.get('log2_fold_change'),
+            r.get('p_value'),
+            r.get('p_value_adjusted'),
+            r.get('n_pairs'),
+            r.get('mean_tumor'),
+            r.get('mean_normal')
+        ]
+        data.append(row)
+
+    return {'columns': columns, 'data': data}
 
 
 @mcp.tool()
@@ -467,7 +486,23 @@ def protein_tumor_vs_normal(cancer, query):
             r['p_value_adjusted'] = None
         logging.warning("No valid p-values to adjust")
 
-    return {'results': results}
+    # Convert to tabular format for better LLM retrieval accuracy
+    columns = ['gene', 'log2_fold_change', 'p_value', 'p_value_adjusted',
+               'n_pairs', 'mean_tumor', 'mean_normal']
+    data = []
+    for r in results:
+        row = [
+            r.get('gene'),
+            r.get('log2_fold_change'),
+            r.get('p_value'),
+            r.get('p_value_adjusted'),
+            r.get('n_pairs'),
+            r.get('mean_tumor'),
+            r.get('mean_normal')
+        ]
+        data.append(row)
+
+    return {'columns': columns, 'data': data}
 
 
 @mcp.tool()
@@ -499,6 +534,9 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
         - p_value_matrix: Adjusted p-values (FDR-corrected) for each correlation
         - item_labels: Labels for each item in the matrices
         - n_samples: Number of samples used in correlation analysis
+        OR if matrix would be too large (>50 items):
+        - available_sites: List of available sites that can be queried
+        - message: Instructions to refine query
     """
 
     cancer_obj = cancers.get(cancer)
@@ -531,6 +569,7 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
     # Build data matrix: rows are items, columns are samples
     item_data = {}  # Dict mapping item label to Series of values across samples
     item_labels = []  # List of item labels in order
+    MAX_ITEMS = 25  # Maximum items before returning available sites instead
 
     for query_item in query_items:
         found = False
@@ -573,16 +612,30 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
                     found = True
                     logging.info(f"Found phosphosite {item_label}")
             else:
-                # Try as gene name in phospho data - get all sites
+                # Try as gene name in phospho data - get ALL sites for the gene
                 matching_rows = [idx for idx in phospho_data.index if idx[0] == query_item]
                 if matching_rows:
-                    # For gene-level queries in phospho, use first site as representative
-                    idx = matching_rows[0]
-                    item_label = f"{idx[0]}_{idx[1]}"
-                    item_labels.append(item_label)
-                    item_data[item_label] = phospho_data.loc[idx]
+                    # Check if adding all these sites would exceed limit
+                    if len(item_labels) + len(matching_rows) > MAX_ITEMS:
+                        # Return available sites instead
+                        available_sites = [f"{idx[0]}_{idx[1]}" for idx in matching_rows]
+                        logging.warning(f"Query would result in {len(item_labels) + len(matching_rows)} items (max {MAX_ITEMS}). Returning available sites for {query_item}.")
+                        return {
+                            "message": f"Too many phosphorylation sites ({len(matching_rows)}) for gene {query_item}. Query would exceed maximum of {MAX_ITEMS} total items. Please specify individual sites from the list below.",
+                            "gene": query_item,
+                            "available_sites": available_sites,
+                            "n_sites": len(matching_rows),
+                            "current_items": len(item_labels),
+                            "max_items": MAX_ITEMS
+                        }
+
+                    # Add all matching phosphosites for this gene
+                    for idx in matching_rows:
+                        item_label = f"{idx[0]}_{idx[1]}"
+                        item_labels.append(item_label)
+                        item_data[item_label] = phospho_data.loc[idx]
                     found = True
-                    logging.info(f"Found phosphosite {item_label} for gene {query_item}")
+                    logging.info(f"Found {len(matching_rows)} phosphosites for gene {query_item}")
 
         # If not found in phospho, try protein data (or if forced to protein)
         if not found and protein_data is not None:
@@ -688,24 +741,23 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
         adjusted_pval_matrix = pval_matrix.copy()
         logging.warning("No valid p-values to adjust")
 
-    # Convert matrices to dictionaries for JSON serialization
-    corr_dict = {}
-    pval_dict = {}
-
-    for i, label_i in enumerate(item_labels):
-        corr_dict[label_i] = {}
-        pval_dict[label_i] = {}
-        for j, label_j in enumerate(item_labels):
+    # Convert to tabular format for better LLM retrieval accuracy
+    # Use lower triangular matrix only (since correlation matrix is symmetric)
+    correlations = []
+    for i in range(n_items):
+        for j in range(i + 1, n_items):  # Only upper triangle (excluding diagonal)
             corr_val = corr_matrix[i, j]
             pval_val = adjusted_pval_matrix[i, j]
-
-            corr_dict[label_i][label_j] = float(corr_val) if not np.isnan(corr_val) else None
-            pval_dict[label_i][label_j] = float(pval_val) if not np.isnan(pval_val) else None
+            correlations.append([
+                item_labels[i],
+                item_labels[j],
+                float(corr_val) if not np.isnan(corr_val) else None,
+                float(pval_val) if not np.isnan(pval_val) else None
+            ])
 
     return {
-        'correlation_matrix': corr_dict,
-        'p_value_adjusted_matrix': pval_dict,
-        'item_labels': item_labels,
+        'columns': ['item1', 'item2', 'correlation', 'p_value_adjusted'],
+        'data': correlations,
         'n_samples': len(tumor_cols)
     }
 
