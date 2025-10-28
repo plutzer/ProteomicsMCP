@@ -25,6 +25,33 @@ cancers = {'brca': cptac.Brca(),
             'pdac': cptac.Pdac(),
 }
 
+# Load and preprocess HPA RNA cell line data
+logging.info("Loading HPA RNA cell line data...")
+hpa_rna_data = None
+try:
+    import os
+    hpa_path = os.path.join(os.path.dirname(__file__), 'datasets', 'hpa_rna_celline.tsv')
+    if os.path.exists(hpa_path):
+        hpa_raw = pd.read_csv(hpa_path, sep='\t')
+        logging.info(f"Loaded HPA data: {hpa_raw.shape[0]} rows")
+
+        # Aggregate duplicates by taking mean nTPM
+        hpa_agg = hpa_raw.groupby(['Gene name', 'Cell line'])['nTPM'].mean().reset_index()
+        logging.info(f"Aggregated to {hpa_agg.shape[0]} unique gene-cell line pairs")
+
+        # Pivot to gene x cell line matrix using nTPM values
+        hpa_matrix = hpa_agg.pivot(index='Gene name', columns='Cell line', values='nTPM')
+        logging.info(f"HPA matrix shape: {hpa_matrix.shape} (genes x cell lines)")
+
+        # Z-transform each gene (row) across cell lines
+        hpa_rna_data = hpa_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=1)
+        logging.info("Applied z-transformation across cell lines for each gene")
+    else:
+        logging.warning(f"HPA data file not found at {hpa_path}")
+except Exception as e:
+    logging.error(f"Error loading HPA data: {e}")
+    hpa_rna_data = None
+
 
 def get_deduplicated_phospho(cancer):
     """
@@ -141,13 +168,10 @@ def phospho_tumor_vs_normal(cancer, query, normalized="true"):
     Returns:
     --------
     dict
-        Dictionary containing for each phosphosite:
-        - gene: Gene name
-        - site: Phosphorylation site
-        - log2_fold_change: Paired log2 fold change (tumor vs normal)
-        - p_value: P-value from paired t-test
-        - p_value_adjusted: FDR-adjusted p-value (Benjamini-Hochberg correction across all queried sites)
-        - n_pairs: Number of paired samples used in analysis
+        Dictionary containing:
+        - data: Dictionary mapping gene names to CSV strings
+                Format: {"GENE1": "site,peptide,database_id,log2_fold_change,p_value,p_value_adjusted,n_pairs,mean_tumor,mean_normal\nS473,...\n..."}
+                Each gene's data is a CSV string with phosphosites as rows
     """
 
     cancer_obj = cancers.get(cancer)
@@ -301,26 +325,36 @@ def phospho_tumor_vs_normal(cancer, query, normalized="true"):
             r['p_value_adjusted'] = None
         logging.warning("No valid p-values to adjust")
 
-    # Convert to tabular format for better LLM retrieval accuracy
-    columns = ['gene', 'site', 'peptide', 'database_id', 'log2_fold_change',
-               'p_value', 'p_value_adjusted', 'n_pairs', 'mean_tumor', 'mean_normal']
-    data = []
+    # Convert to CSV format grouped by gene
+    # Group results by gene
+    gene_groups = {}
     for r in results:
-        row = [
-            r.get('gene'),
-            r.get('site'),
-            r.get('peptide'),
-            r.get('database_id'),
-            r.get('log2_fold_change'),
-            r.get('p_value'),
-            r.get('p_value_adjusted'),
-            r.get('n_pairs'),
-            r.get('mean_tumor'),
-            r.get('mean_normal')
-        ]
-        data.append(row)
+        gene = r.get('gene')
+        if gene not in gene_groups:
+            gene_groups[gene] = []
+        gene_groups[gene].append(r)
 
-    return {'columns': columns, 'data': data}
+    # Create CSV for each gene
+    gene_data = {}
+    for gene, gene_results in gene_groups.items():
+        csv_rows = ["site,peptide,database_id,log2_fold_change,p_value,p_value_adjusted,n_pairs,mean_tumor,mean_normal"]
+
+        for r in gene_results:
+            site = r.get('site', '')
+            peptide = r.get('peptide', '')
+            db_id = r.get('database_id', '')
+            log2_fc = f"{r.get('log2_fold_change'):.3f}" if r.get('log2_fold_change') is not None else ""
+            pval = f"{r.get('p_value'):.4f}" if r.get('p_value') is not None else ""
+            pval_adj = f"{r.get('p_value_adjusted'):.4f}" if r.get('p_value_adjusted') is not None else ""
+            n_pairs = r.get('n_pairs', 0)
+            mean_tumor = f"{r.get('mean_tumor'):.3f}" if r.get('mean_tumor') is not None else ""
+            mean_normal = f"{r.get('mean_normal'):.3f}" if r.get('mean_normal') is not None else ""
+
+            csv_rows.append(f"{site},{peptide},{db_id},{log2_fc},{pval},{pval_adj},{n_pairs},{mean_tumor},{mean_normal}")
+
+        gene_data[gene] = "\n".join(csv_rows)
+
+    return {'data': gene_data}
 
 
 @mcp.tool()
@@ -338,12 +372,10 @@ def protein_tumor_vs_normal(cancer, query):
     Returns:
     --------
     dict
-        Dictionary containing for each protein:
-        - gene: Gene name
-        - log2_fold_change: Paired log2 fold change (tumor vs normal)
-        - p_value: P-value from paired t-test
-        - p_value_adjusted: FDR-adjusted p-value (Benjamini-Hochberg correction across all queried proteins)
-        - n_pairs: Number of paired samples used in analysis
+        Dictionary containing:
+        - data: CSV-formatted string with header row
+                Format: "gene,log2_fold_change,p_value,p_value_adjusted,n_pairs,mean_tumor,mean_normal"
+                Each row contains statistics for one protein
     """
 
     cancer_obj = cancers.get(cancer)
@@ -486,23 +518,21 @@ def protein_tumor_vs_normal(cancer, query):
             r['p_value_adjusted'] = None
         logging.warning("No valid p-values to adjust")
 
-    # Convert to tabular format for better LLM retrieval accuracy
-    columns = ['gene', 'log2_fold_change', 'p_value', 'p_value_adjusted',
-               'n_pairs', 'mean_tumor', 'mean_normal']
-    data = []
-    for r in results:
-        row = [
-            r.get('gene'),
-            r.get('log2_fold_change'),
-            r.get('p_value'),
-            r.get('p_value_adjusted'),
-            r.get('n_pairs'),
-            r.get('mean_tumor'),
-            r.get('mean_normal')
-        ]
-        data.append(row)
+    # Convert to CSV format
+    csv_rows = ["gene,log2_fold_change,p_value,p_value_adjusted,n_pairs,mean_tumor,mean_normal"]
 
-    return {'columns': columns, 'data': data}
+    for r in results:
+        gene = r.get('gene')
+        log2_fc = f"{r.get('log2_fold_change'):.3f}" if r.get('log2_fold_change') is not None else ""
+        pval = f"{r.get('p_value'):.4f}" if r.get('p_value') is not None else ""
+        pval_adj = f"{r.get('p_value_adjusted'):.4f}" if r.get('p_value_adjusted') is not None else ""
+        n_pairs = r.get('n_pairs', 0)
+        mean_tumor = f"{r.get('mean_tumor'):.3f}" if r.get('mean_tumor') is not None else ""
+        mean_normal = f"{r.get('mean_normal'):.3f}" if r.get('mean_normal') is not None else ""
+
+        csv_rows.append(f"{gene},{log2_fc},{pval},{pval_adj},{n_pairs},{mean_tumor},{mean_normal}")
+
+    return {'data': "\n".join(csv_rows)}
 
 
 @mcp.tool()
@@ -530,11 +560,12 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
     --------
     dict
         Dictionary containing:
-        - correlation_matrix: Pairwise Pearson correlations between all queried items
-        - p_value_matrix: Adjusted p-values (FDR-corrected) for each correlation
-        - item_labels: Labels for each item in the matrices
-        - n_samples: Number of samples used in correlation analysis
-        OR if matrix would be too large (>50 items):
+        - correlation_matrix: CSV-formatted correlation matrix with row/column labels
+                             Format: ",item1,item2,...\nitem1,1.000,0.456,...\nitem2,0.456,1.000,..."
+        - p_value_matrix: CSV-formatted p-value matrix (FDR-corrected)
+                         Format: ",item1,item2,...\nitem1,0.000,0.001,...\nitem2,0.001,0.000,..."
+        - n_samples: Number of tumor samples used in correlation analysis
+        OR if matrix would be too large (>25 items):
         - available_sites: List of available sites that can be queried
         - message: Instructions to refine query
     """
@@ -741,30 +772,170 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
         adjusted_pval_matrix = pval_matrix.copy()
         logging.warning("No valid p-values to adjust")
 
-    # Convert to tabular format for better LLM retrieval accuracy
-    # Use lower triangular matrix only (since correlation matrix is symmetric)
-    correlations = []
+    # Convert to CSV format
+    # Create two matrices: correlation and p-value
+    # Header row with item labels
+    corr_csv_rows = [",".join([""] + item_labels)]  # Empty cell for top-left, then column headers
+    pval_csv_rows = [",".join([""] + item_labels)]
+
     for i in range(n_items):
-        for j in range(i + 1, n_items):  # Only upper triangle (excluding diagonal)
+        # Row label + correlation values
+        corr_row = [item_labels[i]]
+        pval_row = [item_labels[i]]
+
+        for j in range(n_items):
             corr_val = corr_matrix[i, j]
             pval_val = adjusted_pval_matrix[i, j]
-            correlations.append([
-                item_labels[i],
-                item_labels[j],
-                float(corr_val) if not np.isnan(corr_val) else None,
-                float(pval_val) if not np.isnan(pval_val) else None
-            ])
+
+            if not np.isnan(corr_val):
+                corr_row.append(f"{corr_val:.3f}")
+            else:
+                corr_row.append("")
+
+            if not np.isnan(pval_val):
+                pval_row.append(f"{pval_val:.4f}")
+            else:
+                pval_row.append("")
+
+        corr_csv_rows.append(",".join(corr_row))
+        pval_csv_rows.append(",".join(pval_row))
 
     return {
-        'columns': ['item1', 'item2', 'correlation', 'p_value_adjusted'],
-        'data': correlations,
+        'correlation_matrix': "\n".join(corr_csv_rows),
+        'p_value_matrix': "\n".join(pval_csv_rows),
         'n_samples': len(tumor_cols)
     }
 
 
+@mcp.tool()
+def hpa_cellline_expression(query, min_zscore="2.0"):
+    """
+    Query HPA RNA cell line expression data for one or more genes.
+
+    Parameters:
+    -----------
+    query : str
+        Comma-separated list of gene symbols (e.g., 'AKT1,TP53,EGFR')
+    min_zscore : str
+        Minimum absolute z-score threshold for filtering results (default: '2.0')
+        Only cell lines with |z-score| >= min_zscore will be returned
+        Set to '0' to return all cell lines
+
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - data: Dictionary mapping gene names to CSV strings
+                Format: {"GENE1": "cell_line,z_score\nCell1,1.234\n...", "GENE2": "..."}
+                Each gene's data is a CSV string with header "cell_line,z_score"
+                Only includes cell lines where |z_score| >= min_zscore
+        - n_genes: Number of genes found
+        - n_cell_lines_total: Total number of cell lines in dataset
+        - n_cell_lines_returned: Number of cell lines meeting threshold
+        - min_zscore: The threshold used for filtering
+        - missing_genes: List of genes not found in dataset (if any)
+    """
+
+    if hpa_rna_data is None:
+        return {"error": "HPA RNA cell line data not loaded. Check if datasets/hpa_rna_celline.tsv exists."}
+
+    # Parse min_zscore parameter
+    try:
+        min_zscore_value = float(min_zscore)
+    except ValueError:
+        return {"error": f"Invalid min_zscore parameter: {min_zscore}. Must be a numeric value."}
+
+    # Parse query string into list of genes
+    query_genes = [gene.strip() for gene in query.split(',')]
+    logging.info(f"Querying {len(query_genes)} genes: {query_genes}")
+
+    # Find matching genes in the data
+    found_genes = []
+    missing_genes = []
+
+    for gene in query_genes:
+        if gene in hpa_rna_data.index:
+            found_genes.append(gene)
+            logging.info(f"Found gene {gene}")
+        else:
+            missing_genes.append(gene)
+            logging.warning(f"Gene {gene} not found in HPA data")
+
+    # Return error if no genes found
+    if len(found_genes) == 0:
+        return {
+            "error": f"No matching genes found for query: {query}",
+            "missing_genes": missing_genes
+        }
+
+    # Extract data for found genes
+    result_data = hpa_rna_data.loc[found_genes]
+    logging.info(f"Obtained data for {len(found_genes)} genes across {result_data.shape[1]} cell lines")
+
+    # Convert to CSV format with gene-keyed structure
+    # Filter by absolute z-score threshold
+    gene_data = {}
+    n_results = 0
+
+    for gene in found_genes:
+        csv_rows = ["cell_line,z_score"]
+        for cell_line in result_data.columns:
+            z_score = result_data.loc[gene, cell_line]
+            if pd.notna(z_score):  # Only include non-NaN values
+                if abs(z_score) >= min_zscore_value:
+                    csv_rows.append(f"{cell_line},{z_score:.3f}")
+                    n_results += 1
+
+        gene_data[gene] = "\n".join(csv_rows)
+
+    logging.info(f"Returning {n_results} gene-cell line pairs (filtered by |z| >= {min_zscore_value})")
+
+    result = {
+        'data': gene_data,
+        'n_genes': len(found_genes),
+        'n_cell_lines_total': result_data.shape[1],
+        'n_cell_lines_returned': n_results,
+        'min_zscore': min_zscore_value
+    }
+
+    if missing_genes:
+        result['missing_genes'] = missing_genes
+        logging.warning(f"Missing genes: {missing_genes}")
+
+    return result
+
+
 def test():
-    print('Testing correlation_analysis...')
+    print('Testing MCP tools...')
     logging.basicConfig(level=logging.INFO)
+
+    # Test HPA cell line expression
+    print('\n' + '='*60)
+    print('Test: HPA Cell Line Expression')
+    print('='*60)
+    try:
+        result = hpa_cellline_expression('AKT1,TP53,EGFR')
+        if isinstance(result, dict):
+            if 'error' in result:
+                print(f"Error: {result['error']}")
+            else:
+                print(f"Genes found: {result['n_genes']}")
+                print(f"Cell lines: {result['n_cell_lines']}")
+                print(f"Total data points: {len(result['data'])}")
+                if result['data']:
+                    print(f"\nSample data (first 5 rows):")
+                    for row in result['data'][:5]:
+                        print(f"  {row[0]:10s} | {row[1]:20s} | z-score: {row[2]:7.3f}")
+                if 'missing_genes' in result:
+                    print(f"Missing genes: {result['missing_genes']}")
+    except Exception as e:
+        print(f"Exception occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print('\n' + '='*60)
+    print('Testing correlation_analysis...')
+    print('='*60)
 
     # Test 1: Phospho correlation analysis
     print('\n' + '='*60)
