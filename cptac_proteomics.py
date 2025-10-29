@@ -25,32 +25,32 @@ cancers = {'brca': cptac.Brca(),
             'pdac': cptac.Pdac(),
 }
 
-# Load and preprocess HPA RNA cell line data
-logging.info("Loading HPA RNA cell line data...")
-hpa_rna_data = None
-try:
-    import os
-    hpa_path = os.path.join(os.path.dirname(__file__), 'datasets', 'hpa_rna_celline.tsv')
-    if os.path.exists(hpa_path):
-        hpa_raw = pd.read_csv(hpa_path, sep='\t')
-        logging.info(f"Loaded HPA data: {hpa_raw.shape[0]} rows")
+# # Load and preprocess HPA RNA cell line data
+# logging.info("Loading HPA RNA cell line data...")
+# hpa_rna_data = None
+# try:
+#     import os
+#     hpa_path = os.path.join(os.path.dirname(__file__), 'datasets', 'hpa_rna_celline.tsv')
+#     if os.path.exists(hpa_path):
+#         hpa_raw = pd.read_csv(hpa_path, sep='\t')
+#         logging.info(f"Loaded HPA data: {hpa_raw.shape[0]} rows")
 
-        # Aggregate duplicates by taking mean nTPM
-        hpa_agg = hpa_raw.groupby(['Gene name', 'Cell line'])['nTPM'].mean().reset_index()
-        logging.info(f"Aggregated to {hpa_agg.shape[0]} unique gene-cell line pairs")
+#         # Aggregate duplicates by taking mean nTPM
+#         hpa_agg = hpa_raw.groupby(['Gene name', 'Cell line'])['nTPM'].mean().reset_index()
+#         logging.info(f"Aggregated to {hpa_agg.shape[0]} unique gene-cell line pairs")
 
-        # Pivot to gene x cell line matrix using nTPM values
-        hpa_matrix = hpa_agg.pivot(index='Gene name', columns='Cell line', values='nTPM')
-        logging.info(f"HPA matrix shape: {hpa_matrix.shape} (genes x cell lines)")
+#         # Pivot to gene x cell line matrix using nTPM values
+#         hpa_matrix = hpa_agg.pivot(index='Gene name', columns='Cell line', values='nTPM')
+#         logging.info(f"HPA matrix shape: {hpa_matrix.shape} (genes x cell lines)")
 
-        # Z-transform each gene (row) across cell lines
-        hpa_rna_data = hpa_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=1)
-        logging.info("Applied z-transformation across cell lines for each gene")
-    else:
-        logging.warning(f"HPA data file not found at {hpa_path}")
-except Exception as e:
-    logging.error(f"Error loading HPA data: {e}")
-    hpa_rna_data = None
+#         # Z-transform each gene (row) across cell lines
+#         hpa_rna_data = hpa_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=1)
+#         logging.info("Applied z-transformation across cell lines for each gene")
+#     else:
+#         logging.warning(f"HPA data file not found at {hpa_path}")
+# except Exception as e:
+#     logging.error(f"Error loading HPA data: {e}")
+#     hpa_rna_data = None
 
 
 def get_deduplicated_phospho(cancer):
@@ -807,253 +807,253 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
     }
 
 
-@mcp.tool()
-def hpa_cellline_expression(query, min_zscore="2.0"):
-    """
-    Query HPA RNA cell line expression data for one or more genes.
+# @mcp.tool()
+# def hpa_cellline_expression(query, min_zscore="2.0"):
+#     """
+#     Query HPA RNA cell line expression data for one or more genes.
 
-    Parameters:
-    -----------
-    query : str
-        Comma-separated list of gene symbols (e.g., 'AKT1,TP53,EGFR')
-    min_zscore : str
-        Minimum absolute z-score threshold for filtering results (default: '2.0')
-        Only cell lines with |z-score| >= min_zscore will be returned
-        Set to '0' to return all cell lines
+#     Parameters:
+#     -----------
+#     query : str
+#         Comma-separated list of gene symbols (e.g., 'AKT1,TP53,EGFR')
+#     min_zscore : str
+#         Minimum absolute z-score threshold for filtering results (default: '2.0')
+#         Only cell lines with |z-score| >= min_zscore will be returned
+#         Set to '0' to return all cell lines
 
-    Returns:
-    --------
-    dict
-        Dictionary containing:
-        - data: Dictionary mapping gene names to CSV strings
-                Format: {"GENE1": "cell_line,z_score\nCell1,1.234\n...", "GENE2": "..."}
-                Each gene's data is a CSV string with header "cell_line,z_score"
-                Only includes cell lines where |z_score| >= min_zscore
-        - n_genes: Number of genes found
-        - n_cell_lines_total: Total number of cell lines in dataset
-        - n_cell_lines_returned: Number of cell lines meeting threshold
-        - min_zscore: The threshold used for filtering
-        - missing_genes: List of genes not found in dataset (if any)
-    """
+#     Returns:
+#     --------
+#     dict
+#         Dictionary containing:
+#         - data: Dictionary mapping gene names to CSV strings
+#                 Format: {"GENE1": "cell_line,z_score\nCell1,1.234\n...", "GENE2": "..."}
+#                 Each gene's data is a CSV string with header "cell_line,z_score"
+#                 Only includes cell lines where |z_score| >= min_zscore
+#         - n_genes: Number of genes found
+#         - n_cell_lines_total: Total number of cell lines in dataset
+#         - n_cell_lines_returned: Number of cell lines meeting threshold
+#         - min_zscore: The threshold used for filtering
+#         - missing_genes: List of genes not found in dataset (if any)
+#     """
 
-    if hpa_rna_data is None:
-        return {"error": "HPA RNA cell line data not loaded. Check if datasets/hpa_rna_celline.tsv exists."}
+#     if hpa_rna_data is None:
+#         return {"error": "HPA RNA cell line data not loaded. Check if datasets/hpa_rna_celline.tsv exists."}
 
-    # Parse min_zscore parameter
-    try:
-        min_zscore_value = float(min_zscore)
-    except ValueError:
-        return {"error": f"Invalid min_zscore parameter: {min_zscore}. Must be a numeric value."}
+#     # Parse min_zscore parameter
+#     try:
+#         min_zscore_value = float(min_zscore)
+#     except ValueError:
+#         return {"error": f"Invalid min_zscore parameter: {min_zscore}. Must be a numeric value."}
 
-    # Parse query string into list of genes
-    query_genes = [gene.strip() for gene in query.split(',')]
-    logging.info(f"Querying {len(query_genes)} genes: {query_genes}")
+#     # Parse query string into list of genes
+#     query_genes = [gene.strip() for gene in query.split(',')]
+#     logging.info(f"Querying {len(query_genes)} genes: {query_genes}")
 
-    # Find matching genes in the data
-    found_genes = []
-    missing_genes = []
+#     # Find matching genes in the data
+#     found_genes = []
+#     missing_genes = []
 
-    for gene in query_genes:
-        if gene in hpa_rna_data.index:
-            found_genes.append(gene)
-            logging.info(f"Found gene {gene}")
-        else:
-            missing_genes.append(gene)
-            logging.warning(f"Gene {gene} not found in HPA data")
+#     for gene in query_genes:
+#         if gene in hpa_rna_data.index:
+#             found_genes.append(gene)
+#             logging.info(f"Found gene {gene}")
+#         else:
+#             missing_genes.append(gene)
+#             logging.warning(f"Gene {gene} not found in HPA data")
 
-    # Return error if no genes found
-    if len(found_genes) == 0:
-        return {
-            "error": f"No matching genes found for query: {query}",
-            "missing_genes": missing_genes
-        }
+#     # Return error if no genes found
+#     if len(found_genes) == 0:
+#         return {
+#             "error": f"No matching genes found for query: {query}",
+#             "missing_genes": missing_genes
+#         }
 
-    # Extract data for found genes
-    result_data = hpa_rna_data.loc[found_genes]
-    logging.info(f"Obtained data for {len(found_genes)} genes across {result_data.shape[1]} cell lines")
+#     # Extract data for found genes
+#     result_data = hpa_rna_data.loc[found_genes]
+#     logging.info(f"Obtained data for {len(found_genes)} genes across {result_data.shape[1]} cell lines")
 
-    # Convert to CSV format with gene-keyed structure
-    # Filter by absolute z-score threshold
-    gene_data = {}
-    n_results = 0
+#     # Convert to CSV format with gene-keyed structure
+#     # Filter by absolute z-score threshold
+#     gene_data = {}
+#     n_results = 0
 
-    for gene in found_genes:
-        csv_rows = ["cell_line,z_score"]
-        for cell_line in result_data.columns:
-            z_score = result_data.loc[gene, cell_line]
-            if pd.notna(z_score):  # Only include non-NaN values
-                if abs(z_score) >= min_zscore_value:
-                    csv_rows.append(f"{cell_line},{z_score:.3f}")
-                    n_results += 1
+#     for gene in found_genes:
+#         csv_rows = ["cell_line,z_score"]
+#         for cell_line in result_data.columns:
+#             z_score = result_data.loc[gene, cell_line]
+#             if pd.notna(z_score):  # Only include non-NaN values
+#                 if abs(z_score) >= min_zscore_value:
+#                     csv_rows.append(f"{cell_line},{z_score:.3f}")
+#                     n_results += 1
 
-        gene_data[gene] = "\n".join(csv_rows)
+#         gene_data[gene] = "\n".join(csv_rows)
 
-    logging.info(f"Returning {n_results} gene-cell line pairs (filtered by |z| >= {min_zscore_value})")
+#     logging.info(f"Returning {n_results} gene-cell line pairs (filtered by |z| >= {min_zscore_value})")
 
-    result = {
-        'data': gene_data,
-        'n_genes': len(found_genes),
-        'n_cell_lines_total': result_data.shape[1],
-        'n_cell_lines_returned': n_results,
-        'min_zscore': min_zscore_value
-    }
+#     result = {
+#         'data': gene_data,
+#         'n_genes': len(found_genes),
+#         'n_cell_lines_total': result_data.shape[1],
+#         'n_cell_lines_returned': n_results,
+#         'min_zscore': min_zscore_value
+#     }
 
-    if missing_genes:
-        result['missing_genes'] = missing_genes
-        logging.warning(f"Missing genes: {missing_genes}")
+#     if missing_genes:
+#         result['missing_genes'] = missing_genes
+#         logging.warning(f"Missing genes: {missing_genes}")
 
-    return result
+#     return result
 
 
-def test():
-    print('Testing MCP tools...')
-    logging.basicConfig(level=logging.INFO)
+# def test():
+#     print('Testing MCP tools...')
+#     logging.basicConfig(level=logging.INFO)
 
-    # Test HPA cell line expression
-    print('\n' + '='*60)
-    print('Test: HPA Cell Line Expression')
-    print('='*60)
-    try:
-        result = hpa_cellline_expression('AKT1,TP53,EGFR')
-        if isinstance(result, dict):
-            if 'error' in result:
-                print(f"Error: {result['error']}")
-            else:
-                print(f"Genes found: {result['n_genes']}")
-                print(f"Cell lines: {result['n_cell_lines']}")
-                print(f"Total data points: {len(result['data'])}")
-                if result['data']:
-                    print(f"\nSample data (first 5 rows):")
-                    for row in result['data'][:5]:
-                        print(f"  {row[0]:10s} | {row[1]:20s} | z-score: {row[2]:7.3f}")
-                if 'missing_genes' in result:
-                    print(f"Missing genes: {result['missing_genes']}")
-    except Exception as e:
-        print(f"Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
+#     # Test HPA cell line expression
+#     print('\n' + '='*60)
+#     print('Test: HPA Cell Line Expression')
+#     print('='*60)
+#     try:
+#         result = hpa_cellline_expression('AKT1,TP53,EGFR')
+#         if isinstance(result, dict):
+#             if 'error' in result:
+#                 print(f"Error: {result['error']}")
+#             else:
+#                 print(f"Genes found: {result['n_genes']}")
+#                 print(f"Cell lines: {result['n_cell_lines']}")
+#                 print(f"Total data points: {len(result['data'])}")
+#                 if result['data']:
+#                     print(f"\nSample data (first 5 rows):")
+#                     for row in result['data'][:5]:
+#                         print(f"  {row[0]:10s} | {row[1]:20s} | z-score: {row[2]:7.3f}")
+#                 if 'missing_genes' in result:
+#                     print(f"Missing genes: {result['missing_genes']}")
+#     except Exception as e:
+#         print(f"Exception occurred: {e}")
+#         import traceback
+#         traceback.print_exc()
 
-    print('\n' + '='*60)
-    print('Testing correlation_analysis...')
-    print('='*60)
+#     print('\n' + '='*60)
+#     print('Testing correlation_analysis...')
+#     print('='*60)
 
-    # Test 1: Phospho correlation analysis
-    print('\n' + '='*60)
-    print('Test 1: Phospho correlation analysis (COAD)')
-    print('='*60)
-    try:
-        result = correlation_analysis('coad', 'CTNNB1_S675,GSK3B_S9,AKT1_S473', data_type='phospho', normalized='true')
-        if isinstance(result, dict):
-            if 'error' in result:
-                print(f"Error: {result['error']}")
-            else:
-                print(f"\nItems analyzed: {result['item_labels']}")
-                print(f"Number of samples: {result['n_samples']}")
-                print(f"\nCorrelation Matrix:")
-                for item_i in result['item_labels']:
-                    row = []
-                    for item_j in result['item_labels']:
-                        val = result['correlation_matrix'][item_i][item_j]
-                        if val is not None:
-                            row.append(f"{val:7.3f}")
-                        else:
-                            row.append("    NaN")
-                    print(f"  {item_i:20s}: {' '.join(row)}")
+#     # Test 1: Phospho correlation analysis
+#     print('\n' + '='*60)
+#     print('Test 1: Phospho correlation analysis (COAD)')
+#     print('='*60)
+#     try:
+#         result = correlation_analysis('coad', 'CTNNB1_S675,GSK3B_S9,AKT1_S473', data_type='phospho', normalized='true')
+#         if isinstance(result, dict):
+#             if 'error' in result:
+#                 print(f"Error: {result['error']}")
+#             else:
+#                 print(f"\nItems analyzed: {result['item_labels']}")
+#                 print(f"Number of samples: {result['n_samples']}")
+#                 print(f"\nCorrelation Matrix:")
+#                 for item_i in result['item_labels']:
+#                     row = []
+#                     for item_j in result['item_labels']:
+#                         val = result['correlation_matrix'][item_i][item_j]
+#                         if val is not None:
+#                             row.append(f"{val:7.3f}")
+#                         else:
+#                             row.append("    NaN")
+#                     print(f"  {item_i:20s}: {' '.join(row)}")
 
-                print(f"\nAdjusted P-value Matrix:")
-                for item_i in result['item_labels']:
-                    row = []
-                    for item_j in result['item_labels']:
-                        val = result['p_value_adjusted_matrix'][item_i][item_j]
-                        if val is not None:
-                            if val == 0.0:
-                                row.append("  0.000")
-                            else:
-                                row.append(f"{val:7.3e}")
-                        else:
-                            row.append("    NaN")
-                    print(f"  {item_i:20s}: {' '.join(row)}")
-    except Exception as e:
-        print(f"Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
+#                 print(f"\nAdjusted P-value Matrix:")
+#                 for item_i in result['item_labels']:
+#                     row = []
+#                     for item_j in result['item_labels']:
+#                         val = result['p_value_adjusted_matrix'][item_i][item_j]
+#                         if val is not None:
+#                             if val == 0.0:
+#                                 row.append("  0.000")
+#                             else:
+#                                 row.append(f"{val:7.3e}")
+#                         else:
+#                             row.append("    NaN")
+#                     print(f"  {item_i:20s}: {' '.join(row)}")
+#     except Exception as e:
+#         print(f"Exception occurred: {e}")
+#         import traceback
+#         traceback.print_exc()
 
-    # Test 2: Protein correlation analysis
-    print('\n' + '='*60)
-    print('Test 2: Protein correlation analysis (LUAD)')
-    print('='*60)
-    try:
-        result = correlation_analysis('luad', 'AKT1,TP53,EGFR,KRAS', data_type='proteomics')
-        if isinstance(result, dict):
-            if 'error' in result:
-                print(f"Error: {result['error']}")
-            else:
-                print(f"\nItems analyzed: {result['item_labels']}")
-                print(f"Number of samples: {result['n_samples']}")
-                print(f"\nCorrelation Matrix:")
-                for item_i in result['item_labels']:
-                    row = []
-                    for item_j in result['item_labels']:
-                        val = result['correlation_matrix'][item_i][item_j]
-                        if val is not None:
-                            row.append(f"{val:7.3f}")
-                        else:
-                            row.append("    NaN")
-                    print(f"  {item_i:20s}: {' '.join(row)}")
+#     # Test 2: Protein correlation analysis
+#     print('\n' + '='*60)
+#     print('Test 2: Protein correlation analysis (LUAD)')
+#     print('='*60)
+#     try:
+#         result = correlation_analysis('luad', 'AKT1,TP53,EGFR,KRAS', data_type='proteomics')
+#         if isinstance(result, dict):
+#             if 'error' in result:
+#                 print(f"Error: {result['error']}")
+#             else:
+#                 print(f"\nItems analyzed: {result['item_labels']}")
+#                 print(f"Number of samples: {result['n_samples']}")
+#                 print(f"\nCorrelation Matrix:")
+#                 for item_i in result['item_labels']:
+#                     row = []
+#                     for item_j in result['item_labels']:
+#                         val = result['correlation_matrix'][item_i][item_j]
+#                         if val is not None:
+#                             row.append(f"{val:7.3f}")
+#                         else:
+#                             row.append("    NaN")
+#                     print(f"  {item_i:20s}: {' '.join(row)}")
 
-                # Only print significant correlations
-                print(f"\nSignificant correlations (adjusted p < 0.05):")
-                for item_i in result['item_labels']:
-                    for item_j in result['item_labels']:
-                        if item_i < item_j:  # Only print upper triangle
-                            corr = result['correlation_matrix'][item_i][item_j]
-                            pval = result['p_value_adjusted_matrix'][item_i][item_j]
-                            if pval is not None and pval < 0.05:
-                                print(f"  {item_i} vs {item_j}: r={corr:.3f}, p_adj={pval:.3e}")
-    except Exception as e:
-        print(f"Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
+#                 # Only print significant correlations
+#                 print(f"\nSignificant correlations (adjusted p < 0.05):")
+#                 for item_i in result['item_labels']:
+#                     for item_j in result['item_labels']:
+#                         if item_i < item_j:  # Only print upper triangle
+#                             corr = result['correlation_matrix'][item_i][item_j]
+#                             pval = result['p_value_adjusted_matrix'][item_i][item_j]
+#                             if pval is not None and pval < 0.05:
+#                                 print(f"  {item_i} vs {item_j}: r={corr:.3f}, p_adj={pval:.3e}")
+#     except Exception as e:
+#         print(f"Exception occurred: {e}")
+#         import traceback
+#         traceback.print_exc()
 
-    # Test 3: TSC2 protein vs MTOR phosphosites (Mixed phospho/protein)
-    print('\n' + '='*60)
-    print('Test 3: MTOR phosphosites vs TSC2 protein correlation (LUAD)')
-    print('='*60)
-    try:
-        result = correlation_analysis('luad', 'MTOR_S2448,MTOR_S2478,MTOR_S2481,MTOR_S1821,TSC2_protein',
-                                     data_type='both', normalized='true')
-        if isinstance(result, dict):
-            if 'error' in result:
-                print(f"Error: {result['error']}")
-            else:
-                print(f"\nItems analyzed: {result['item_labels']}")
-                print(f"Number of samples: {result['n_samples']}")
-                print(f"\nCorrelation Matrix:")
-                for item_i in result['item_labels']:
-                    row = []
-                    for item_j in result['item_labels']:
-                        val = result['correlation_matrix'][item_i][item_j]
-                        if val is not None:
-                            row.append(f"{val:7.3f}")
-                        else:
-                            row.append("    NaN")
-                    print(f"  {item_i:20s}: {' '.join(row)}")
+#     # Test 3: TSC2 protein vs MTOR phosphosites (Mixed phospho/protein)
+#     print('\n' + '='*60)
+#     print('Test 3: MTOR phosphosites vs TSC2 protein correlation (LUAD)')
+#     print('='*60)
+#     try:
+#         result = correlation_analysis('luad', 'MTOR_S2448,MTOR_S2478,MTOR_S2481,MTOR_S1821,TSC2_protein',
+#                                      data_type='both', normalized='true')
+#         if isinstance(result, dict):
+#             if 'error' in result:
+#                 print(f"Error: {result['error']}")
+#             else:
+#                 print(f"\nItems analyzed: {result['item_labels']}")
+#                 print(f"Number of samples: {result['n_samples']}")
+#                 print(f"\nCorrelation Matrix:")
+#                 for item_i in result['item_labels']:
+#                     row = []
+#                     for item_j in result['item_labels']:
+#                         val = result['correlation_matrix'][item_i][item_j]
+#                         if val is not None:
+#                             row.append(f"{val:7.3f}")
+#                         else:
+#                             row.append("    NaN")
+#                     print(f"  {item_i:20s}: {' '.join(row)}")
 
-                # Highlight TSC2 correlations
-                print(f"\nMTOR phosphosite correlations with TSC2 protein:")
-                tsc2_label = [l for l in result['item_labels'] if 'TSC2' in l][0]
-                for item in result['item_labels']:
-                    if item != tsc2_label and 'MTOR' in item:
-                        corr = result['correlation_matrix'][item][tsc2_label]
-                        pval = result['p_value_adjusted_matrix'][item][tsc2_label]
-                        sig = '***' if pval and pval < 0.001 else '**' if pval and pval < 0.01 else '*' if pval and pval < 0.05 else ''
-                        if corr is not None and pval is not None:
-                            direction = 'NEGATIVE' if corr < 0 else 'positive'
-                            print(f"  {item:15s}: r={corr:7.3f}, p_adj={pval:8.4f}  ({direction}) {sig}")
-    except Exception as e:
-        print(f"Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
+#                 # Highlight TSC2 correlations
+#                 print(f"\nMTOR phosphosite correlations with TSC2 protein:")
+#                 tsc2_label = [l for l in result['item_labels'] if 'TSC2' in l][0]
+#                 for item in result['item_labels']:
+#                     if item != tsc2_label and 'MTOR' in item:
+#                         corr = result['correlation_matrix'][item][tsc2_label]
+#                         pval = result['p_value_adjusted_matrix'][item][tsc2_label]
+#                         sig = '***' if pval and pval < 0.001 else '**' if pval and pval < 0.01 else '*' if pval and pval < 0.05 else ''
+#                         if corr is not None and pval is not None:
+#                             direction = 'NEGATIVE' if corr < 0 else 'positive'
+#                             print(f"  {item:15s}: r={corr:7.3f}, p_adj={pval:8.4f}  ({direction}) {sig}")
+#     except Exception as e:
+#         print(f"Exception occurred: {e}")
+#         import traceback
+#         traceback.print_exc()
 
 def main():
     logging.info("Starting CPTAC Query Tool")
