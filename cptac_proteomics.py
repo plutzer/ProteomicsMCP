@@ -638,10 +638,15 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
                     # Use first match if multiple
                     idx = matching_rows[0]
                     item_label = f"{idx[0]}_{idx[1]}"
-                    item_labels.append(item_label)
-                    item_data[item_label] = phospho_data.loc[idx]
-                    found = True
-                    logging.info(f"Found phosphosite {item_label}")
+                    # Only add if not already present (avoid duplicates)
+                    if item_label not in item_data:
+                        item_labels.append(item_label)
+                        item_data[item_label] = phospho_data.loc[idx]
+                        found = True
+                        logging.info(f"Found phosphosite {item_label}")
+                    else:
+                        found = True
+                        logging.info(f"Phosphosite {item_label} already in query, skipping duplicate")
             else:
                 # Try as gene name in phospho data - get ALL sites for the gene
                 matching_rows = [idx for idx in phospho_data.index if idx[0] == query_item]
@@ -661,12 +666,16 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
                         }
 
                     # Add all matching phosphosites for this gene
+                    added_count = 0
                     for idx in matching_rows:
                         item_label = f"{idx[0]}_{idx[1]}"
-                        item_labels.append(item_label)
-                        item_data[item_label] = phospho_data.loc[idx]
+                        # Only add if not already present (avoid duplicates)
+                        if item_label not in item_data:
+                            item_labels.append(item_label)
+                            item_data[item_label] = phospho_data.loc[idx]
+                            added_count += 1
                     found = True
-                    logging.info(f"Found {len(matching_rows)} phosphosites for gene {query_item}")
+                    logging.info(f"Found {added_count} phosphosites for gene {query_item}")
 
         # If not found in phospho, try protein data (or if forced to protein)
         if not found and protein_data is not None:
@@ -677,17 +686,27 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
                 if matching_indices:
                     idx = matching_indices[0]
                     item_label = f"{idx[0]}_protein"
-                    item_labels.append(item_label)
-                    item_data[item_label] = protein_data.loc[idx]
-                    found = True
-                    logging.info(f"Found protein {item_label}")
+                    # Only add if not already present (avoid duplicates)
+                    if item_label not in item_data:
+                        item_labels.append(item_label)
+                        item_data[item_label] = protein_data.loc[idx]
+                        found = True
+                        logging.info(f"Found protein {item_label}")
+                    else:
+                        found = True
+                        logging.info(f"Protein {item_label} already in query, skipping duplicate")
             else:
                 if gene in protein_data.index:
                     item_label = f"{gene}_protein"
-                    item_labels.append(item_label)
-                    item_data[item_label] = protein_data.loc[gene]
-                    found = True
-                    logging.info(f"Found protein {item_label}")
+                    # Only add if not already present (avoid duplicates)
+                    if item_label not in item_data:
+                        item_labels.append(item_label)
+                        item_data[item_label] = protein_data.loc[gene]
+                        found = True
+                        logging.info(f"Found protein {item_label}")
+                    else:
+                        found = True
+                        logging.info(f"Protein {item_label} already in query, skipping duplicate")
 
         if not found:
             logging.warning(f"No data found for query item: {query_item}")
@@ -699,14 +718,27 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
     # Create DataFrame with items as rows and samples as columns
     data_matrix = pd.DataFrame(item_data).T
     logging.info(f"Data matrix shape: {data_matrix.shape} (items x samples)")
+    logging.info(f"Number of item_labels: {len(item_labels)}")
+    logging.info(f"Number of rows in data_matrix: {len(data_matrix)}")
+
+    # Reset index to ensure integer indexing works properly
+    data_matrix.index = range(len(data_matrix))
 
     # Filter to tumor samples only (exclude .N samples)
     tumor_cols = [col for col in data_matrix.columns if '.N' not in col]
     data_matrix = data_matrix[tumor_cols]
     logging.info(f"Using {len(tumor_cols)} tumor samples for correlation analysis")
+    logging.info(f"Final data_matrix shape: {data_matrix.shape}")
 
     # Calculate pairwise correlations
-    n_items = len(item_labels)
+    # Use data_matrix length to ensure we don't go out of bounds
+    n_items = len(data_matrix)
+    logging.info(f"n_items for correlation matrix: {n_items}")
+
+    # Verify item_labels matches data_matrix rows
+    if len(item_labels) != n_items:
+        logging.error(f"Mismatch: {len(item_labels)} item_labels but {n_items} rows in data_matrix")
+        return {"error": f"Internal error: item count mismatch ({len(item_labels)} labels vs {n_items} data rows)"}
     corr_matrix = np.zeros((n_items, n_items))
     pval_matrix = np.zeros((n_items, n_items))
 
@@ -1055,9 +1087,52 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
 #         import traceback
 #         traceback.print_exc()
 
+def test():
+    """Test the correlation_analysis function with the problematic query"""
+    print('Testing correlation_analysis...')
+    logging.basicConfig(level=logging.INFO)
+
+    print('\n' + '='*60)
+    print('Test: Correlation analysis with mixed phospho sites (COAD)')
+    print('='*60)
+    try:
+        result = correlation_analysis(
+            cancer='coad',
+            query='ELL_S442,ELL_S309,POLR2A_S2,POLR2A_S5,CDK1_T14,CDK1_T161,CDK2_T160,TP53_S15,TP53_S392,SMAD2_S245,SMAD2_S250,SMAD3_S423,STAT3_S727,E2F1_S364',
+            data_type='both'
+        )
+
+        if isinstance(result, dict):
+            if 'error' in result:
+                print(f"Error: {result['error']}")
+            elif 'message' in result:
+                print(f"Message: {result['message']}")
+                if 'available_sites' in result:
+                    print(f"Available sites: {result['available_sites'][:5]}...")
+            else:
+                print(f"\nSuccess!")
+                print(f"Number of samples: {result.get('n_samples', 'N/A')}")
+
+                # Parse correlation matrix to show sample
+                if 'correlation_matrix' in result:
+                    corr_lines = result['correlation_matrix'].split('\n')
+                    print(f"\nCorrelation Matrix (first 3 rows):")
+                    for line in corr_lines[:4]:
+                        print(f"  {line}")
+
+                print(f"\nTest PASSED!")
+    except Exception as e:
+        print(f"Exception occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
 def main():
     logging.info("Starting CPTAC Query Tool")
     mcp.run(transport='stdio')
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        test()
+    else:
+        main()
