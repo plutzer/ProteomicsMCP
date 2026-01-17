@@ -1,0 +1,23 @@
+version: '3.8'
+
+# CPTAC Proteomics Explorer - Docker Compose Configuration
+#
+# Self-contained build with pre-downloaded CPTAC data.
+# No external configuration required - just run:
+#   docker-compose up -d
+
+services:
+  cptac-explorer:
+    build: .
+    container_name: cptac-proteomics-explorer
+    ports:
+      - "3838:3838"
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3838/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

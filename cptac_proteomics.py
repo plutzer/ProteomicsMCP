@@ -1,4 +1,3 @@
-import cptac
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Union
@@ -14,16 +13,14 @@ from mcp.server.fastmcp import FastMCP
 # Initialize FastMCP server
 mcp = FastMCP("cptac_query")
 
-cancers = {'brca': cptac.Brca(),
-            'coad': cptac.Coad(),
-            'hnscc': cptac.Hnscc(),
-            'luad': cptac.Luad(),
-            'ovarian': cptac.Ov(),
-            'ccrcc': cptac.Ccrcc(),
-            'gbm': cptac.Gbm(),
-            'lscc': cptac.Lscc(),
-            'pdac': cptac.Pdac(),
-}
+# Use local data loader instead of cptac library
+from local_data_loader import LocalDataLoader
+
+# Initialize the data loader
+data_loader = LocalDataLoader()
+
+# List of supported cancer types
+SUPPORTED_CANCERS = list(data_loader.CANCER_MAP.keys())
 
 # # Load and preprocess HPA RNA cell line data
 # logging.info("Loading HPA RNA cell line data...")
@@ -53,84 +50,106 @@ cancers = {'brca': cptac.Brca(),
 #     hpa_rna_data = None
 
 
-def get_deduplicated_phospho(cancer):
+def get_deduplicated_phospho(cancer_name: str):
     """
     Get deduplicated phosphoproteomics data in transposed format.
 
     Parameters:
     -----------
-    cancer : cptac cancer object
-        CPTAC cancer dataset object
+    cancer_name : str
+        Cancer type name (e.g., 'brca', 'luad')
 
     Returns:
     --------
     pd.DataFrame
         Transposed, deduplicated phosphoproteomics data with samples as columns
     """
-    logging.info("Loading and deduplicating phosphoproteomics data...")
-    phospho = cancer.get_phosphoproteomics('bcm').T
+    logging.info(f"Loading and deduplicating phosphoproteomics data for {cancer_name}...")
+    # Load data using local loader (returns samples as rows, phosphosites as columns)
+    phospho = data_loader.get_phosphoproteomics(cancer_name)
+    # Transpose to get phosphosites as rows, samples as columns
+    phospho = phospho.T
     phospho.columns = phospho.columns.values.tolist()
     phospho = phospho.groupby(level=[0,1,2,3]).agg('mean').replace(-np.inf, np.nan).replace(np.inf, np.nan)
     logging.info(f"Phospho data shape: {phospho.shape} (phosphosites x samples)")
     return phospho
 
 
-def get_normalized_phospho(cancer):
+def get_normalized_phospho(cancer_name: str):
     """
     Get protein-normalized phosphoproteomics data.
 
+    Normalization subtracts whole-cell protein abundance from phosphosite abundance
+    for each gene, making phosphorylation changes independent of protein level changes.
+
     Parameters:
     -----------
-    cancer : cptac cancer object
-        CPTAC cancer dataset object
+    cancer_name : str
+        Cancer type name (e.g., 'brca', 'luad')
 
     Returns:
     --------
     pd.DataFrame
         Protein-normalized phosphoproteomics data
     """
-    logging.info("Calculating protein-normalized phosphoproteomics...")
-    phospho = get_deduplicated_phospho(cancer)
-    whole_cell = cancer.get_proteomics('bcm').T
+    logging.info(f"Calculating protein-normalized phosphoproteomics for {cancer_name}...")
+    phospho = get_deduplicated_phospho(cancer_name)
+    # Load proteomics data (samples as rows, proteins as columns), then transpose
+    whole_cell = data_loader.get_proteomics(cancer_name).T
     whole_cell.columns = whole_cell.columns.values.tolist()
 
-    normalized_phospho = phospho.copy()
-    samples_normalized = 0
-    samples_skipped = 0
+    # Find common samples
+    common_samples = [col for col in phospho.columns if col in whole_cell.columns]
+    samples_skipped = len(phospho.columns) - len(common_samples)
 
-    for colname in normalized_phospho.columns:
-        if colname in whole_cell.columns:
-            wc_col = whole_cell[colname]
-            phospho_col = phospho[colname]
-            merge = pd.merge(phospho_col, wc_col, left_index=True, right_index=True, suffixes=('_phospho', '_wc'))
-            merge[colname] = merge[colname+'_phospho'] - merge[colname+'_wc']
-            normalized_phospho[colname] = merge[colname]
-            samples_normalized += 1
-        else:
-            normalized_phospho = normalized_phospho.drop(columns=[colname])
-            samples_skipped += 1
+    if not common_samples:
+        logging.warning("No common samples found between phospho and proteomics data")
+        return phospho.iloc[:, 0:0]  # Return empty DataFrame with correct index
 
-    logging.info(f"Normalization complete: {samples_normalized} samples normalized, {samples_skipped} samples removed")
+    logging.info(f"Normalizing {len(common_samples)} samples, {samples_skipped} samples skipped (no proteomics data)")
+
+    # Extract gene names from phospho MultiIndex (first level)
+    gene_names = phospho.index.get_level_values(0)
+
+    # Create a mapping DataFrame: for each phosphosite, get the gene's protein value
+    # This is vectorized for efficiency
+    normalized_phospho = phospho[common_samples].copy()
+
+    for sample in common_samples:
+        # Get protein values indexed by gene name
+        protein_values = whole_cell[sample]
+
+        # For each phosphosite, look up the corresponding protein value
+        # Map gene names to protein values
+        protein_for_phospho = gene_names.map(lambda g: protein_values.get(g, np.nan))
+
+        # Subtract protein from phospho (vectorized)
+        normalized_phospho[sample] = phospho[sample].values - protein_for_phospho.values
+
+    logging.info(f"Normalization complete: {len(common_samples)} samples normalized")
     logging.info(f"Normalized data shape: {normalized_phospho.shape}")
     return normalized_phospho
 
 
-def get_deduplicated_proteomics(cancer):
+def get_deduplicated_proteomics(cancer_name: str):
     """
     Get deduplicated proteomics data in transposed format.
 
     Parameters:
     -----------
-    cancer : cptac cancer object
-        CPTAC cancer dataset object
+    cancer_name : str
+        Cancer type name (e.g., 'brca', 'luad')
 
     Returns:
     --------
     pd.DataFrame
         Transposed, deduplicated proteomics data with samples as columns
     """
-    logging.info("Loading and deduplicating proteomics data...")
-    proteomics = cancer.get_proteomics('bcm').T
+    logging.info(f"Loading and deduplicating proteomics data for {cancer_name}...")
+    # Load data using local loader (returns samples as rows, proteins as columns)
+    proteomics = data_loader.get_proteomics(cancer_name)
+    # Transpose to get proteins as rows, samples as columns
+    proteomics = proteomics.T
     proteomics.columns = proteomics.columns.values.tolist()
 
     # Check if index is MultiIndex and deduplicate if needed
@@ -148,7 +167,7 @@ def get_deduplicated_proteomics(cancer):
 @mcp.tool()
 def get_cancer_types():
     """Get list of available CPTAC cancer types."""
-    return cptac.get_cancer_options()
+    return SUPPORTED_CANCERS
 
 @mcp.tool()
 def phospho_tumor_vs_normal(cancer, query, normalized="true"):
@@ -174,15 +193,14 @@ def phospho_tumor_vs_normal(cancer, query, normalized="true"):
                 Each gene's data is a CSV string with phosphosites as rows
     """
 
-    cancer_obj = cancers.get(cancer)
-    if cancer_obj is None:
-        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {list(cancers.keys())}")
+    if cancer not in SUPPORTED_CANCERS:
+        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {SUPPORTED_CANCERS}")
 
     # Get phospho data using helper functions
     if normalized == 'true':
-        phospho = get_normalized_phospho(cancer_obj)
+        phospho = get_normalized_phospho(cancer)
     elif normalized == 'false':
-        phospho = get_deduplicated_phospho(cancer_obj)
+        phospho = get_deduplicated_phospho(cancer)
     else:
         raise ValueError("Parameter 'normalized' must be 'true' or 'false'")
 
@@ -378,14 +396,12 @@ def protein_tumor_vs_normal(cancer, query):
                 Each row contains statistics for one protein
     """
 
-    cancer_obj = cancers.get(cancer)
-    if cancer_obj is None:
-        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {list(cancers.keys())}")
+    if cancer not in SUPPORTED_CANCERS:
+        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {SUPPORTED_CANCERS}")
 
-    # Get proteomics data
+    # Get proteomics data using helper function
     logging.info("Loading proteomics data...")
-    proteomics = cancer_obj.get_proteomics('bcm').T
-    proteomics.columns = proteomics.columns.values.tolist()
+    proteomics = get_deduplicated_proteomics(cancer)
     logging.info(f"Proteomics data shape: {proteomics.shape} (proteins x samples)")
 
     # Check if index is MultiIndex and deduplicate if needed
@@ -570,9 +586,8 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
         - message: Instructions to refine query
     """
 
-    cancer_obj = cancers.get(cancer)
-    if cancer_obj is None:
-        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {list(cancers.keys())}")
+    if cancer not in SUPPORTED_CANCERS:
+        raise ValueError(f"Unsupported cancer type: {cancer}. Supported types are: {SUPPORTED_CANCERS}")
 
     # Validate data_type parameter
     if data_type not in ['phospho', 'proteomics', 'both']:
@@ -584,14 +599,14 @@ def correlation_analysis(cancer, query, data_type="phospho", normalized="true"):
 
     if data_type in ['phospho', 'both']:
         if normalized == 'true':
-            phospho_data = get_normalized_phospho(cancer_obj)
+            phospho_data = get_normalized_phospho(cancer)
         elif normalized == 'false':
-            phospho_data = get_deduplicated_phospho(cancer_obj)
+            phospho_data = get_deduplicated_phospho(cancer)
         else:
             raise ValueError("Parameter 'normalized' must be 'true' or 'false'")
 
     if data_type in ['proteomics', 'both']:
-        protein_data = get_deduplicated_proteomics(cancer_obj)
+        protein_data = get_deduplicated_proteomics(cancer)
 
     # Parse query string
     query_items = [item.strip() for item in query.split(',')]

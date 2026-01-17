@@ -1,0 +1,19 @@
+# CPTAC Proteomics Explorer - Python Dependencies
+
+# Core data science packages
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# CPTAC data access
+cptac>=1.5.0
+
+# Web application framework
+shiny>=0.6.0
+shinywidgets>=0.3.0
+
+# Interactive visualizations
+plotly>=5.17.0
+
+# FastMCP for MCP server functionality
+fastmcp>=0.1.0
